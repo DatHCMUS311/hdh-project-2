@@ -140,8 +140,38 @@ endif
 
 LDFLAGS = -z max-page-size=4096
 
-$K/kernel: $(OBJS) $(OBJS_KCSAN) $K/kernel.ld
-	$(LD) $(LDFLAGS) -T $K/kernel.ld -o $K/kernel $(OBJS) $(OBJS_KCSAN)
+$K/kernel.pre: $(OBJS) $(OBJS_KCSAN) $K/kernel.ld
+	$(LD) $(LDFLAGS) -T $K/kernel.ld -o $@ $(OBJS) $(OBJS_KCSAN)
+
+$K/backtrace_map.c: $K/kernel.pre
+	$(OBJDUMP) -d -l $< | awk ' \
+	  BEGIN { print "#include \"types.h\""; \
+	          print "struct backtrace_entry { uint64 addr; const char *function; const char *file; int line; };"; \
+	          print "const struct backtrace_entry backtrace_entries[] = {" } \
+	  /^[[:xdigit:]]+ <.*>:/ { \
+	    funcname = $$0; sub(/^[^<]*</, "", funcname); sub(/>:.*/, "", funcname); \
+	    sub(/\+0x[[:xdigit:]]+$$/, "", funcname); file = ""; next \
+	  } \
+	  /:[0-9]+$$/ { \
+	    file = $$0; sub(/:[0-9]+$$/, "", file); sub(/^\.\//, "", file); \
+	    line = $$0; sub(/^.*:/, "", line); next \
+	  } \
+	  { \
+	    instruction = $$0; sub(/^[[:space:]]*/, "", instruction); \
+	    if (funcname != "" && file != "" && instruction ~ /^[[:xdigit:]]+:/) { \
+	      address = instruction; sub(/:.*/, "", address); \
+	      printf "  { 0x%sULL, \"%s\", \"%s\", %s },\n", address, funcname, file, line \
+	    } \
+	  } \
+	  END { print "};"; \
+	        print "const uint backtrace_entries_count = sizeof(backtrace_entries) / sizeof(backtrace_entries[0]);" } \
+	' > $@
+
+$K/backtrace_map.o: $K/backtrace_map.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$K/kernel: $(OBJS) $(OBJS_KCSAN) $K/backtrace_map.o $K/kernel.ld
+	$(LD) $(LDFLAGS) -T $K/kernel.ld -o $@ $(OBJS) $(OBJS_KCSAN) $K/backtrace_map.o
 	$(OBJDUMP) -S $K/kernel > $K/kernel.asm
 	$(OBJDUMP) -t $K/kernel | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $K/kernel.sym
 $(OBJS): EXTRAFLAG := $(KCSANFLAG)
@@ -302,7 +332,7 @@ newfs.img:
 clean:
 	rm -rf *.tex *.dvi *.idx *.aux *.log *.ind *.ilg *.dSYM *.zip *.pcap \
 	*/*.o */*.d */*.asm */*.sym \
-	$K/kernel fs.img \
+	$K/kernel $K/kernel.pre $K/backtrace_map.c fs.img \
 	mkfs/mkfs .gdbinit \
         $U/usys.S \
 	$(UPROGS)
