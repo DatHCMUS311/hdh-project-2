@@ -58,7 +58,7 @@ backtrace(void)
 
     if (lo > 0) {
       const struct backtrace_entry *entry = &backtrace_entries[lo - 1];
-      printk("  %s — %s:%d\n", entry->function, entry->file, entry->line);
+      printk("%p  %s — %s:%d\n", (void *)ra, entry->function, entry->file, entry->line);
     } else {
       printk("  unknown - unknown:0\n");
     }
