@@ -25,6 +25,52 @@ static struct {
 
 static char digits[] = "0123456789abcdef";
 
+struct backtrace_entry {
+  uint64 addr;
+  const char *function;
+  const char *file;
+  int line;
+};
+
+__attribute__((weak)) const struct backtrace_entry backtrace_entries[1];
+__attribute__((weak)) const uint backtrace_entries_count;
+
+void
+backtrace(void)
+{
+  printk("backtrace:\n");
+  uint64 fp = r_fp();
+  uint64 stack_bottom = PGROUNDDOWN(fp);
+  uint64 stack_top = stack_bottom + PGSIZE;
+
+  while (fp >= stack_bottom + 16 && fp < stack_top) {
+    uint64 ra = *(uint64 *)(fp - 8);
+    uint lo = 0;
+    uint hi = backtrace_entries_count;
+
+    while (lo < hi) {
+      uint mid = lo + (hi - lo) / 2;
+      if (backtrace_entries[mid].addr <= ra)
+        lo = mid + 1;
+      else
+        hi = mid;
+    }
+
+    if (lo > 0) {
+      const struct backtrace_entry *entry = &backtrace_entries[lo - 1];
+      printk("  %s — %s:%d\n", entry->function, entry->file, entry->line);
+    } else {
+      printk("  unknown - unknown:0\n");
+    }
+
+    uint64 prev_fp = *(uint64 *)(fp - 16);
+
+    if (prev_fp <= fp || prev_fp >= stack_top)
+      break;
+
+    fp = prev_fp;
+  }
+}
 static void
 printint(long long xx, int base, int sign)
 {
@@ -140,6 +186,7 @@ panic(char *s)
   panicking = 1;
   printk("panic: ");
   printk("%s\n", s);
+  backtrace();
   panicked = 1; // freeze uart output from other CPUs
   for (;;)
     ;
